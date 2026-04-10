@@ -1618,7 +1618,7 @@ DEFAULT_CONFIG = {
     "tts": {
         "provider": "edge",  # "edge" (free) | "elevenlabs" (premium) | "openai" | "xai" | "minimax" | "mistral" | "gemini" | "neutts" (local) | "kittentts" (local) | "piper" (local)
         "edge": {
-            "voice": "en-US-AriaNeural",
+            "voice": "de-DE-FlorianMultilingualNeural",
             # Popular: AriaNeural, JennyNeural, AndrewNeural, BrianNeural, SoniaNeural
         },
         "elevenlabs": {
