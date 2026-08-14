@@ -1,0 +1,27 @@
+name: aimux-bridge-service
+label: aimux Bridge
+kind: backend
+version: 1.0.0
+description: >
+  Background service that turns aimux Personal-Federation chat notifications
+  into a "doorbell" for Hermes sessions that do not run under an aimux PTY
+  (Web frontend, gateway). The aimux daemon POSTs a thin notification to a
+  loopback-only HTTP listener owned by this plugin; the plugin maps the
+  originating channel to a target platform session and injects a
+  MessageEvent ("new message in #x — call read_messages") so the agent
+  wakes and reads the message itself via the aimux-chat MCP tools.
+
+  No inbound listener is added to the gateway core: the listener lives and
+  dies with this plugin, binds strictly to 127.0.0.1, and authenticates
+  every request with a shared secret (constant-time compare). This ships
+  under ``plugins/services/aimux_bridge/`` and registers a background
+  service via ``PluginContext.register_background_service``.
+
+  Wire contract v1 (aimux >= v0.6.6-beta49, pinned by TestRingPushWebhookContractV1).
+author: nsyring
+requires_env:
+  - name: AIMUX_BRIDGE_SECRET
+    description: "Shared secret; the same value is set in the aimux daemon's config.yaml under chat.push_webhooks[].secret"
+    prompt: "aimux bridge shared secret"
+    password: true
+optional_env: []
