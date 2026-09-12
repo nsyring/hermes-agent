@@ -1021,7 +1021,7 @@ DEFAULT_CONFIG = {
         "provider": "edge",
         "edge": {
             # Popular: AriaNeural, JennyNeural, AndrewNeural, BrianNeural, SoniaNeural
-            "voice": "en-US-AriaNeural",
+            "voice": "de-DE-FlorianMultilingualNeural",
         },
         "elevenlabs": {
             "voice_id": "pNInz6obpgDQGcFmaJgB",  # Adam
