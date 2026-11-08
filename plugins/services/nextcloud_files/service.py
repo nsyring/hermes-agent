@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 from .base import BaseService, ServiceEvent
 from .client import NextcloudFilesClient, FileInfo
@@ -27,7 +27,7 @@ class FileSyncState:
     def __init__(self, path: Optional[str] = None):
         default = "~/.hermes/file_sync_state.json"
         self._path = Path(os.path.expanduser(path or default))
-        self._entries: Dict[str, dict] = {}
+        self._entries: dict[str, dict] = {}
         self._load()
 
     def _load(self):
@@ -66,7 +66,7 @@ class FileSyncState:
         self._entries.pop(path, None)
         self.save()
 
-    def get_all(self) -> Dict[str, dict]:
+    def get_all(self) -> dict[str, dict]:
         return dict(self._entries)
 
 
@@ -155,7 +155,7 @@ class FileWatcher:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._process.kill()
         if self._reader_task:
             self._reader_task.cancel()
@@ -200,36 +200,68 @@ class NotifyPushListener:
             return []
 
     async def _discover_ws_endpoint(self, http_client) -> Optional[str]:
-        """Discover WebSocket endpoint from NC capabilities."""
+        """Discover WebSocket endpoint from NC capabilities.
+
+        Returns None when the server answers but does not advertise
+        notify_push; transport/HTTP errors propagate so the caller can retry.
+        """
         url = f"{self._base_url}/ocs/v2.php/cloud/capabilities"
-        try:
-            resp = await http_client.get(url, headers={
-                "OCS-APIRequest": "true",
-                "Accept": "application/json",
-            })
-            resp.raise_for_status()
-            caps = resp.json().get("ocs", {}).get("data", {}).get("capabilities", {})
-            ws_url = caps.get("notify_push", {}).get("endpoints", {}).get("websocket")
-            return ws_url
-        except Exception as e:
-            logger.error("[NotifyPush] Failed to discover endpoint: %s", e)
-            return None
+        resp = await http_client.get(url, headers={
+            "OCS-APIRequest": "true",
+            "Accept": "application/json",
+        })
+        resp.raise_for_status()
+        caps = resp.json().get("ocs", {}).get("data", {}).get("capabilities", {})
+        return caps.get("notify_push", {}).get("endpoints", {}).get("websocket")
 
     async def start(self):
-        """Start the WebSocket listener."""
+        """Start the WebSocket listener.
+
+        Returns False only when the server definitively lacks notify_push. A
+        failed discovery (DNS outage, server unreachable at gateway start) is
+        retried in the background instead of disabling incoming sync until
+        the next restart.
+        """
         import httpx as _httpx
         self._http = _httpx.AsyncClient(
             auth=(self._username, self._password),
             timeout=10.0,
             limits=_httpx.Limits(max_keepalive_connections=0),
         )
-        self._ws_url = await self._discover_ws_endpoint(self._http)
+        try:
+            self._ws_url = await self._discover_ws_endpoint(self._http)
+        except Exception as e:
+            logger.warning("[NotifyPush] Endpoint discovery failed: %s (retrying in background)", e)
+            self._running = True
+            self._listener_task = asyncio.create_task(self._discover_then_listen())
+            return True
         if not self._ws_url:
             logger.warning("[NotifyPush] No WebSocket endpoint found")
             return False
         self._running = True
         self._listener_task = asyncio.create_task(self._listen_loop())
         return True
+
+    async def _discover_then_listen(self):
+        """Retry endpoint discovery with backoff, then run the listen loop."""
+        backoff = 5
+        while self._running and not self._ws_url:
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 300)
+            try:
+                self._ws_url = await self._discover_ws_endpoint(self._http)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("[NotifyPush] Endpoint discovery failed: %s (retry in %ds)", e, backoff)
+                continue
+            if not self._ws_url:
+                logger.warning("[NotifyPush] No WebSocket endpoint found, incoming sync disabled")
+                self._running = False
+                return
+            logger.info("[NotifyPush] Endpoint discovered after retry")
+        if self._running:
+            await self._listen_loop()
 
     async def _listen_loop(self):
         """Connect to WebSocket and listen, reconnect on failure."""
@@ -368,7 +400,7 @@ class NextcloudFilesService(BaseService):
         self._outgoing_task = self._supervised_task(self._outgoing_loop(), "outgoing_loop")
 
         if self._do_initial_sync:
-            self._sync_task = self._supervised_task(self._initial_sync(), "initial_sync")
+            self._sync_task = self._supervised_task(self._initial_sync_with_retry(), "initial_sync")
 
         logger.info("[NC Files] Started (local_path=%s)", self._local_path)
         return True
@@ -520,7 +552,22 @@ class NextcloudFilesService(BaseService):
                 logger.error("[NC Files] Outgoing loop error: %s", e)
                 await asyncio.sleep(1)
 
-    async def _initial_sync(self):
+    INITIAL_SYNC_MAX_BACKOFF = 300
+
+    async def _initial_sync_with_retry(self):
+        """Run the initial sync until it succeeds, backing off between attempts.
+
+        A single failure used to leave local and remote out of sync until the
+        next gateway restart (observed 2026-11-07 during a DNS outage).
+        """
+        backoff = 10
+        while not await self._initial_sync():
+            logger.info("[NC Files] Retrying initial sync in %ds", backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, self.INITIAL_SYNC_MAX_BACKOFF)
+
+    async def _initial_sync(self) -> bool:
+        """One full reconciliation pass; returns False when it failed."""
         try:
             remote_files = await self._client.propfind("/", depth="infinity")
             stored_state = self._sync_state.get_all()
@@ -567,10 +614,12 @@ class NextcloudFilesService(BaseService):
 
             logger.info("[NC Files] Initial sync complete: %d downloaded (%.1f MB), %d uploaded",
                         downloaded, total_bytes / 1e6, uploaded)
+            return True
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.error("[NC Files] Initial sync failed: %s", e)
+            return False
 
     async def _notify_agent(self, file_info: FileInfo):
         from gateway.config import Platform
