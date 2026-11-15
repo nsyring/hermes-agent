@@ -24,6 +24,20 @@ _ABORT = object()
 _DONE = object()
 
 
+_FINALIZE_TIMEOUT_S = 10.0
+
+
+def _finalize_timeout(tts_config: Any) -> float:
+    """``tts.streaming.finalize_timeout``: seconds the turn waits, after the last text delta, for
+    the remaining clauses to be synthesised before the stream is aborted. Synthesis is serial, so
+    a long reply on a slow provider needs more than the default; non-numeric / <= 0 → default."""
+    try:
+        value = float((tts_config.get("streaming") or {}).get("finalize_timeout", _FINALIZE_TIMEOUT_S))
+    except (AttributeError, TypeError, ValueError):
+        return _FINALIZE_TIMEOUT_S
+    return value if value > 0 else _FINALIZE_TIMEOUT_S
+
+
 class _HandleDeclined(Exception):
     """The adapter declined ``begin_streaming_tts`` when the first PCM chunk arrived."""
 
@@ -39,6 +53,7 @@ class StreamingTTSConsumer:
         # Resolved once; None => inactive, gateway falls back to whole-file TTS.
         self._streamer = resolve_streaming_provider(tts_config)
         self._chunker = SentenceChunker.from_config(tts_config)
+        self.finalize_timeout = _finalize_timeout(tts_config)
         # Provisional: refreshed from the streamer when the handle opens on the first PCM chunk,
         # since an OpenAI-compatible endpoint reports its real rate only in the response (#76466).
         self._audio_format = audio_format or AudioFormat() if self._streamer is None else self._streamer_format()

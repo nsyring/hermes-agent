@@ -667,6 +667,22 @@ class TestPostAudioTimeoutAbort:
 
 
 
+class TestFinalizeTimeoutConfig:
+    """``tts.streaming.finalize_timeout`` sets how long the turn waits for the last clauses."""
+
+    @pytest.mark.parametrize("cfg, expected", [
+        ({}, 10.0),
+        ({"streaming": {"finalize_timeout": 120}}, 120.0),
+        ({"streaming": {"finalize_timeout": "45.5"}}, 45.5),
+        ({"streaming": {"finalize_timeout": 0}}, 10.0),
+        ({"streaming": {"finalize_timeout": "soon"}}, 10.0),
+        ({"streaming": None}, 10.0),
+    ])
+    def test_value_parsing(self, cfg, expected):
+        from gateway.streaming_tts_consumer import _finalize_timeout
+        assert _finalize_timeout(cfg) == expected
+
+
 class TestEndpointReportedRate:
     """Issue #76466: the adapter handle opens with the rate the provider learned from the
     endpoint's response, not the construction-time default."""

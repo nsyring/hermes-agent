@@ -1481,10 +1481,12 @@ class GatewayTurnMixin(GatewayBackgroundMixin, GatewayTurnPrepareMixin, GatewayT
             return
         _stts.finish()
         try:
-            await _stts.wait_complete(timeout=10.0)
+            await _stts.wait_complete(timeout=getattr(_stts, "finalize_timeout", 10.0))
         except Exception as _stts_done_err:
             logger.debug("streaming TTS wait_complete error: %s", _stts_done_err)
         if not _stts.done:
+            logger.warning("streaming TTS not finished %.0fs after the reply text ended; aborting the "
+                           "stream (tts.streaming.finalize_timeout)", getattr(_stts, "finalize_timeout", 10.0))
             _stts.abort("streaming TTS finalisation timeout")
             await _stts.wait_complete(timeout=2.0)
         if _stts.suppress_whole_file and adapter is not None:
